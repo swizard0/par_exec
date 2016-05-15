@@ -1,0 +1,47 @@
+use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, UnionResult, ThreadContextBuilder};
+use super::super::set::Set;
+
+pub enum Error {
+    NotInitialized,
+}
+
+pub struct SequentalExecutor<TC> {
+    thread_context: Option<TC>,
+}
+
+impl<TC> SequentalExecutor<TC> {
+    pub fn new() -> SequentalExecutor<TC> {
+        SequentalExecutor {
+            thread_context: None,
+        }
+    }
+}
+
+impl<TC> Executor for SequentalExecutor<TC> {
+    type TC = TC;
+    type E = Error;
+
+    fn run<TCB, TCBE>(self, thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
+        where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>
+    {
+        let maybe_thread_context = thread_context_builder
+            .make_thread_context()
+            .map_err(|e| ExecutorNewError::ThreadContextBuilder(e));
+        Ok(SequentalExecutor {
+            thread_context: Some(try!(maybe_thread_context)),
+        })
+    }
+
+    fn execute_job<J, S, T, JR, JE>(&mut self, input: S, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, S::E, JR::E>>>
+        where J: Job<TC = Self::TC, T = T, S = S, R = JR, E = JE>, S: Set<T = T> + 'static, JR: UnionResult, JE: Sync + Send + 'static
+    {
+        if let Some(thread_context) = self.thread_context.as_mut() {
+            job.execute(thread_context, &input, 0 .. input.size())
+                .map(|v| Some(v))
+                .map_err(|e| ExecutorJobError::Job(e))
+        } else {
+            Err(ExecutorJobError::Executor(Error::NotInitialized))
+        }
+    }
+}
