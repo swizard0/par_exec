@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::BinaryHeap;
 use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, UnionResult, ThreadContextBuilder};
-use super::super::set::Set;
 
 pub enum Error {
     NotInitialized,
@@ -136,9 +135,9 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
         Ok(self)
     }
 
-    fn execute_job<J, S, T, JR, JE>(&mut self, input: S, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, S::E, JR::E>>>
-        where J: Job<TC = Self::TC, T = T, S = S, R = JR, E = JE>, S: Set<T = T> + 'static, JR: UnionResult, JE: Sync + Send + 'static
+    fn execute_job<J, T, JR, JE>(&mut self, input_size: usize, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
+        where J: Job<TC = Self::TC, T = T, R = JR, E = JE>, JR: UnionResult, JE: Sync + Send + 'static
     {
         struct UnionItem<JR>(JR);
 
@@ -163,21 +162,19 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
         }
 
         let union_result = Arc::new(Mutex::new(BinaryHeap::new()));
-        let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, S::E, JR::E>>>>> =
+        let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, JR::E>>>>> =
             Arc::new(Mutex::new(Vec::new()));
         let arc_job = Arc::new(job);
-        let arc_input = Arc::new(input);
         let sync_iter = Arc::new(AtomicUsize::new(0));
 
         for slave in self.slaves.iter() {
             let local_job = arc_job.clone();
             let local_union_result = union_result.clone();
             let local_errors = errors.clone();
-            let local_input = arc_input.clone();
             let local_sync_iter = sync_iter.clone();
             slave.tx.send(Command::Job(Box::new(move |thread_context| {
                 // execute job
-                match local_job.execute(thread_context, &local_input, SyncIter::new(local_sync_iter.clone(), local_input.size())) {
+                match local_job.execute(thread_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
                     Ok(mut current_result) =>
                         // union result
                         loop {
