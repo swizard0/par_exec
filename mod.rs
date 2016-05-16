@@ -22,7 +22,6 @@ pub enum JobExecuteError<JE, RE> {
 
 pub trait Job: Sync + Send + 'static {
     type TC;
-    type T;
     type R: Reduce;
     type E;
 
@@ -49,7 +48,7 @@ pub trait Executor: Sized {
     fn run<TCB, TCBE>(self, thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
         where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>;
 
-    fn execute_job<J, T, JR, JE>(&mut self, input_size: usize, job: J) ->
+    fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, T = T, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static;
+        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static;
 }

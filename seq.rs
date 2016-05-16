@@ -31,9 +31,9 @@ impl<TC> Executor for SequentalExecutor<TC> {
         })
     }
 
-    fn execute_job<J, T, JR, JE>(&mut self, input_size: usize, job: J) ->
+    fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, T = T, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static
+        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static
     {
         if let Some(thread_context) = self.thread_context.as_mut() {
             job.execute(thread_context, 0 .. input_size)
