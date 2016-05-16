@@ -6,4 +6,9 @@ description = "Simple generic parallel executor with MapReduce style."
 license = "MIT"
 keywords = ["executor", "parallel", "thread", "threads", "threadpool", "mapreduce"]
 
+[dev-dependencies]
+rand = "0.3"
+itertools = "0.4"
+
 [dependencies]
+num_cpus = "0.2"

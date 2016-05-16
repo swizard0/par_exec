@@ -4,8 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::BinaryHeap;
+use num_cpus;
 use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, Reduce, ThreadContextBuilder};
 
+#[derive(Debug)]
 pub enum Error {
     NotInitialized,
     SlaveError(io::Error),
@@ -115,6 +117,12 @@ impl<TC> ParallelExecutor<TC> {
             slaves_count: slaves_count,
             slaves: Vec::new(),
         }
+    }
+}
+
+impl<TC> Default for ParallelExecutor<TC> {
+    fn default() -> ParallelExecutor<TC> {
+        ParallelExecutor::new(num_cpus::get())
     }
 }
 

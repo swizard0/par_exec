@@ -1,5 +1,6 @@
 use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, Reduce, ThreadContextBuilder};
 
+#[derive(Debug)]
 pub enum Error {
     NotInitialized,
 }
