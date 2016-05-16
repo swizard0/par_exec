@@ -1,8 +1,8 @@
 pub mod seq;
 pub mod par;
 
-pub trait Reduce: Sized + Sync + Send + 'static {
-    type E: Sync + Send + 'static;
+pub trait Reduce: Sized + Send + 'static {
+    type E: Send + 'static;
 
     fn len(&self) -> Option<usize>;
     fn reduce(self, other_result: Self) -> Result<Self, Self::E>;
@@ -50,5 +50,5 @@ pub trait Executor: Sized {
 
     fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static;
+        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Send + 'static;
 }

@@ -137,7 +137,7 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
 
     fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static
+        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Send + 'static
     {
         struct ReduceItem<JR>(JR);
 
