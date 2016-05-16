@@ -1,11 +1,11 @@
 pub mod seq;
 pub mod par;
 
-pub trait UnionResult: Sized + Sync + Send + 'static {
+pub trait Reduce: Sized + Sync + Send + 'static {
     type E: Sync + Send + 'static;
 
     fn len(&self) -> Option<usize>;
-    fn union(self, other_result: Self) -> Result<Self, Self::E>;
+    fn reduce(self, other_result: Self) -> Result<Self, Self::E>;
 }
 
 pub trait ThreadContextBuilder {
@@ -23,11 +23,11 @@ pub enum JobExecuteError<JE, RE> {
 pub trait Job: Sync + Send + 'static {
     type TC;
     type T;
-    type R: UnionResult;
+    type R: Reduce;
     type E;
 
     fn execute<IS>(&self, thread_context: &mut Self::TC, input_indices: IS) ->
-        Result<Self::R, JobExecuteError<Self::E, <Self::R as UnionResult>::E>>
+        Result<Self::R, JobExecuteError<Self::E, <Self::R as Reduce>::E>>
         where IS: Iterator<Item = usize>;
 }
 
@@ -51,5 +51,5 @@ pub trait Executor: Sized {
 
     fn execute_job<J, T, JR, JE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, T = T, R = JR, E = JE>, JR: UnionResult, JE: Sync + Send + 'static;
+        where J: Job<TC = Self::TC, T = T, R = JR, E = JE>, JR: Reduce, JE: Sync + Send + 'static;
 }
