@@ -21,7 +21,7 @@ impl<TC> Executor for SequentalExecutor<TC> {
     type TC = TC;
     type E = Error;
 
-    fn run<TCB, TCBE>(self, thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
+    fn run<TCB, TCBE>(self, mut thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
         where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>
     {
         let maybe_thread_context = thread_context_builder

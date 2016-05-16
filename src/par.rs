@@ -130,7 +130,7 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
     type TC = TC;
     type E = Error;
 
-    fn run<TCB, TCBE>(mut self, thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
+    fn run<TCB, TCBE>(mut self, mut thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
         where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>
     {
         for i in 0 .. self.slaves_count {

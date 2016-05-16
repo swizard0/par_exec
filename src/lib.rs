@@ -14,7 +14,7 @@ pub trait ThreadContextBuilder {
     type TC;
     type E;
 
-    fn make_thread_context(&self) -> Result<Self::TC, Self::E>;
+    fn make_thread_context(&mut self) -> Result<Self::TC, Self::E>;
 }
 
 #[derive(Debug)]
@@ -67,10 +67,9 @@ mod tests {
 
     use std::sync::Arc;
     use std::collections::BinaryHeap;
-    use super::{Executor, Job, JobExecuteError, ThreadContextBuilder, Reduce};
+    use super::{Executor, Job, ExecutorJobError, JobExecuteError, ThreadContextBuilder, Reduce};
 
-    use super::seq::SequentalExecutor;
-    use super::par::ParallelExecutor;
+    use super::{seq, par};
 
     struct EmptyThreadContextBuilder;
 
@@ -78,7 +77,7 @@ mod tests {
         type TC = ();
         type E = ();
 
-        fn make_thread_context(&self) -> Result<Self::TC, Self::E> {
+        fn make_thread_context(&mut self) -> Result<Self::TC, Self::E> {
             Ok(())
         }
     }
@@ -119,19 +118,71 @@ mod tests {
         let mut sample = (*data).clone();
         sample.sort();
 
-        let Reducer(seq_result) =
+        let Reducer(result) =
             executor.execute_job(data.len(), Sorter(data.clone())).unwrap().unwrap();
-        assert_eq!(sample, seq_result);
+        assert_eq!(sample, result);
     }
 
     #[test]
     fn mergesort_seq() {
-        mergesort(SequentalExecutor::new().run(EmptyThreadContextBuilder).unwrap());
+        mergesort(seq::SequentalExecutor::new().run(EmptyThreadContextBuilder).unwrap());
     }
 
     #[test]
     fn mergesort_par() {
-        let exec: ParallelExecutor<_> = Default::default();
+        let exec: par::ParallelExecutor<_> = Default::default();
         mergesort(exec.run(EmptyThreadContextBuilder).unwrap());
+    }
+
+    #[test]
+    fn par_errors() {
+        #[derive(Debug)]
+        struct Error(usize);
+
+        struct Looser(Arc<Vec<u64>>);
+
+        impl Job for Looser {
+            type TC = usize;
+            type R = Reducer;
+            type E = Error;
+
+            fn execute<IS>(&self, thread_context: &mut Self::TC, _input_indices: IS) ->
+                Result<Self::R, JobExecuteError<Self::E, <Self::R as Reduce>::E>>
+                where IS: Iterator<Item = usize>
+            {
+                Err(JobExecuteError::Job(Error(*thread_context)))
+            }
+        }
+
+        struct SlaveIndex(usize);
+
+        impl ThreadContextBuilder for SlaveIndex {
+            type TC = usize;
+            type E = ();
+
+            fn make_thread_context(&mut self) -> Result<Self::TC, Self::E> {
+                self.0 += 1;
+                Ok(self.0)
+            }
+        }
+
+        let mut executor = par::ParallelExecutor::new(5).run(SlaveIndex(0)).unwrap();
+        match executor.execute_job(10, Looser(Arc::new(vec![]))) {
+            Ok(_) =>
+                panic!("Unexpected successfull result"),
+            Err(ExecutorJobError::Several(errs)) => {
+                let mut slaves_report: Vec<usize> = errs
+                    .into_iter()
+                    .map(|e| match e {
+                        ExecutorJobError::Job(JobExecuteError::Job(Error(i))) => i,
+                        other => panic!("Unexpected set member error: {:?}", other),
+                    })
+                    .collect();
+                slaves_report.sort();
+                assert_eq!(slaves_report, vec![1, 2, 3, 4, 5]);
+            },
+            Err(other) =>
+                panic!("Unexpected error result: {:?}", other),
+        }
     }
 }
