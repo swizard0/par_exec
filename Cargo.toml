@@ -1,0 +1,9 @@
+[package]
+name = "par_exec"
+version = "0.1.0"
+authors = ["Alexey Voznyuk <me@swizard.info>"]
+description = "Simple generic parallel executor with MapReduce style."
+license = "MIT"
+keywords = ["executor", "parallel", "thread", "threads", "threadpool", "mapreduce"]
+
+[dependencies]
