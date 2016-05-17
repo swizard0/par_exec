@@ -146,7 +146,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
 
     fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
+        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE> + Sync + Send + 'static,
         JRC: ReduceContextRetrieve<LC = Self::LC>,
         JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
         JE: Send + 'static,

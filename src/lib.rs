@@ -31,7 +31,7 @@ pub enum JobExecuteError<JE, RE> {
     Result(RE),
 }
 
-pub trait Job: Sync + Send + 'static {
+pub trait Job {
     type LC;
     type RC: ReduceContextRetrieve<LC = Self::LC>;
     type R: Reduce<RC = Self::RC>;
@@ -64,7 +64,7 @@ pub trait Executor: Sized {
 
     fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
+        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE> + Sync + Send + 'static,
         JRC: ReduceContextRetrieve<LC = Self::LC>,
         JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
         JE: Send + 'static,
