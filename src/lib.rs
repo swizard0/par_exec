@@ -9,7 +9,7 @@ pub trait Reduce: Sized + Send + 'static {
     type E: Send + 'static;
 
     fn len(&self) -> Option<usize>;
-    fn reduce(self, other_result: Self, reduce_context: &mut Self::RC) -> Result<Self, Self::E>;
+    fn reduce(self, other: Self, reduce_context: &mut Self::RC) -> Result<Self, Self::E>;
 }
 
 pub trait LocalContextBuilder {
@@ -93,8 +93,8 @@ mod tests {
             Some(self.0.len())
         }
 
-        fn reduce(self, other_result: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
-            Ok(Reducer(self.0.into_iter().merge_by(other_result.0.into_iter(), |a, b| a < b).collect()))
+        fn reduce(self, other: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
+            Ok(Reducer(self.0.into_iter().merge_by(other.0.into_iter(), |a, b| a < b).collect()))
         }
     }
 
@@ -155,7 +155,7 @@ mod tests {
                 None
             }
 
-            fn reduce(self, _other_result: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
+            fn reduce(self, _other: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
                 Err(empty::EmptyError)
             }
         }
