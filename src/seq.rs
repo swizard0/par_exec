@@ -33,12 +33,13 @@ impl<LC> Executor for SequentalExecutor<LC> {
         })
     }
 
-    fn execute_job<J, JRC, JR, JE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>> where
+    fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
         JRC: ReduceContextRetrieve<LC = Self::LC>,
-        JR: Reduce<RC = JRC>,
-        JE: Send + 'static
+        JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
+        JE: Send + 'static,
+        JRE: Send + 'static
     {
         if let Some(local_context) = self.local_context.as_mut() {
             job.execute(local_context, 0 .. input_size)

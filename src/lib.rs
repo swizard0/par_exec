@@ -4,9 +4,9 @@ pub mod seq;
 pub mod par;
 pub mod empty;
 
-pub trait Reduce: Sized + Send + 'static {
+pub trait Reduce: Sized {
     type RC;
-    type E: Send + 'static;
+    type E;
 
     fn len(&self) -> Option<usize>;
     fn reduce(self, other: Self, reduce_context: &mut Self::RC) -> Result<Self, Self::E>;
@@ -62,12 +62,13 @@ pub trait Executor: Sized {
     fn run<LCB, LCBE>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>;
 
-    fn execute_job<J, JRC, JR, JE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>> where
+    fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
         JRC: ReduceContextRetrieve<LC = Self::LC>,
-        JR: Reduce<RC = JRC>,
-        JE: Send + 'static;
+        JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
+        JE: Send + 'static,
+        JRE: Send + 'static;
 }
 
 #[cfg(test)]
