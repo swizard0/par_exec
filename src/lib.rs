@@ -4,12 +4,12 @@ pub mod seq;
 pub mod par;
 pub mod empty;
 
-pub trait Reduce: Sized {
-    type RC;
+pub trait Reducer {
+    type R;
     type E;
 
-    fn len(&self) -> Option<usize>;
-    fn reduce(self, other: Self, reduce_context: &mut Self::RC) -> Result<Self, Self::E>;
+    fn len(&self, item: &Self::R) -> Option<usize>;
+    fn reduce(&mut self, item_a: Self::R, item_b: Self::R) -> Result<Self::R, Self::E>;
 }
 
 pub trait LocalContextBuilder {
@@ -19,7 +19,7 @@ pub trait LocalContextBuilder {
     fn make_local_context(&mut self) -> Result<Self::LC, Self::E>;
 }
 
-pub trait ReduceContextRetrieve {
+pub trait ReducerRetrieve {
     type LC;
 
     fn get(local_context: &mut Self::LC) -> &mut Self;
@@ -28,17 +28,17 @@ pub trait ReduceContextRetrieve {
 #[derive(Debug)]
 pub enum JobExecuteError<JE, RE> {
     Job(JE),
-    Result(RE),
+    Reducer(RE),
 }
 
 pub trait Job {
     type LC;
-    type RC: ReduceContextRetrieve<LC = Self::LC>;
-    type R: Reduce<RC = Self::RC>;
+    type R;
+    type RR: Reducer<R = Self::R> + ReducerRetrieve<LC = Self::LC>;
     type E;
 
     fn execute<IS>(&self, local_context: &mut Self::LC, input_indices: IS) ->
-        Result<Self::R, JobExecuteError<Self::E, <Self::R as Reduce>::E>>
+        Result<Self::R, JobExecuteError<Self::E, <Self::RR as Reducer>::E>>
         where IS: Iterator<Item = usize>;
 }
 
@@ -62,11 +62,11 @@ pub trait Executor: Sized {
     fn run<LCB, LCBE>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>;
 
-    fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
+    fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE> + Sync + Send + 'static,
-        JRC: ReduceContextRetrieve<LC = Self::LC>,
-        JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
+        J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
+        JRR: Reducer<R = JR, E = JRE> + ReducerRetrieve<LC = Self::LC>,
+        JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static;
 }
@@ -80,62 +80,80 @@ mod tests {
 
     use std::sync::Arc;
     use std::collections::BinaryHeap;
-    use super::{Executor, Job, ExecutorJobError, JobExecuteError, LocalContextBuilder, Reduce, ReduceContextRetrieve};
+    use super::{Executor, Job, ExecutorJobError, JobExecuteError, LocalContextBuilder, Reducer, ReducerRetrieve};
 
     use super::{seq, par, empty};
 
-    struct Reducer(Vec<u64>);
+    struct SorterReducer;
+    struct SorterLocalContext(SorterReducer);
+    struct SorterLocalContextBuilder;
+    struct SorterJob(Arc<Vec<u64>>);
 
-    impl Reduce for Reducer {
-        type RC = empty::EmptyReduceContext;
+    impl Reducer for SorterReducer {
+        type R = Vec<u64>;
         type E = empty::EmptyError;
 
-        fn len(&self) -> Option<usize> {
-            Some(self.0.len())
+        fn len(&self, item: &Self::R) -> Option<usize> {
+            Some(item.len())
         }
 
-        fn reduce(self, other: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
-            Ok(Reducer(self.0.into_iter().merge_by(other.0.into_iter(), |a, b| a < b).collect()))
+        fn reduce(&mut self, item_a: Self::R, item_b: Self::R) -> Result<Self::R, Self::E> {
+            Ok(item_a.into_iter().merge_by(item_b.into_iter(), |a, b| a < b).collect())
         }
     }
 
-    struct Sorter(Arc<Vec<u64>>);
+    impl ReducerRetrieve for SorterReducer {
+        type LC = SorterLocalContext;
 
-    impl Job for Sorter {
-        type LC = empty::EmptyLocalContext;
-        type RC = empty::EmptyReduceContext;
-        type R = Reducer;
+        fn get(local_context: &mut Self::LC) -> &mut Self {
+            &mut local_context.0
+        }
+    }
+
+    impl LocalContextBuilder for SorterLocalContextBuilder {
+        type LC = SorterLocalContext;
+        type E = empty::EmptyError;
+
+        fn make_local_context(&mut self) -> Result<Self::LC, Self::E> {
+            Ok(SorterLocalContext(SorterReducer))
+        }
+    }
+
+    impl Job for SorterJob {
+        type LC = SorterLocalContext;
+        type R = Vec<u64>;
+        type RR = SorterReducer;
         type E = empty::EmptyError;
 
         fn execute<IS>(&self, _local_context: &mut Self::LC, input_indices: IS) ->
-            Result<Self::R, JobExecuteError<Self::E, <Self::R as Reduce>::E>>
+            Result<Self::R, JobExecuteError<Self::E, <Self::RR as Reducer>::E>>
             where IS: Iterator<Item = usize>
         {
             let heap = BinaryHeap::from(input_indices.map(|i| self.0[i]).collect::<Vec<_>>());
-            Ok(Reducer(heap.into_sorted_vec()))
+            Ok(heap.into_sorted_vec())
         }
     }
 
-    fn mergesort<E, EE>(mut executor: E) where E: Executor<LC = empty::EmptyLocalContext, E = EE>, EE: ::std::fmt::Debug {
+    fn mergesort<E, EE>(mut executor: E) where E: Executor<LC = SorterLocalContext, E = EE>, EE: ::std::fmt::Debug {
         let mut rng = rand::thread_rng();
         let data: Arc<Vec<u64>> = Arc::new((0 .. 262144).map(|_| rng.gen()).collect());
         let mut sample = (*data).clone();
         sample.sort();
 
-        let Reducer(result) =
-            executor.execute_job(data.len(), Sorter(data.clone())).unwrap().unwrap();
+        let result =
+            executor.execute_job(data.len(), SorterJob(data.clone())).unwrap().unwrap();
         assert_eq!(sample, result);
     }
 
     #[test]
     fn mergesort_seq() {
-        mergesort(seq::SequentalExecutor::new().run(empty::EmptyLocalContextBuilder).unwrap());
+        mergesort(seq::SequentalExecutor::new().run(SorterLocalContextBuilder).unwrap());
     }
 
     #[test]
     fn mergesort_par() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.run(empty::EmptyLocalContextBuilder).unwrap());
+        mergesort(exec.run(SorterLocalContextBuilder).unwrap());
     }
 
     #[test]
@@ -143,25 +161,24 @@ mod tests {
         #[derive(Debug)]
         struct LooserError(usize);
         struct LooserReducer;
-        struct LooserReduceContext;
-        struct LooserLocalContext(usize, LooserReduceContext);
+        struct LooserLocalContext(usize, LooserReducer);
         struct LooserLocalContextBuilder(usize);
         struct LooserJob;
 
-        impl Reduce for LooserReducer {
-            type RC = LooserReduceContext;
+        impl Reducer for LooserReducer {
+            type R = ();
             type E = empty::EmptyError;
 
-            fn len(&self) -> Option<usize> {
+            fn len(&self, _item: &Self::R) -> Option<usize> {
                 None
             }
 
-            fn reduce(self, _other: Self, _reduce_context: &mut Self::RC) -> Result<Self, Self::E> {
+            fn reduce(&mut self, _item_a: Self::R, _item_b: Self::R) -> Result<Self::R, Self::E> {
                 Err(empty::EmptyError)
             }
         }
 
-        impl ReduceContextRetrieve for LooserReduceContext {
+        impl ReducerRetrieve for LooserReducer {
             type LC = LooserLocalContext;
 
             fn get(local_context: &mut Self::LC) -> &mut Self {
@@ -175,18 +192,18 @@ mod tests {
 
             fn make_local_context(&mut self) -> Result<Self::LC, Self::E> {
                 self.0 += 1;
-                Ok(LooserLocalContext(self.0, LooserReduceContext))
+                Ok(LooserLocalContext(self.0, LooserReducer))
             }
         }
 
         impl Job for LooserJob {
             type LC = LooserLocalContext;
-            type RC = LooserReduceContext;
-            type R = LooserReducer;
+            type R = ();
+            type RR = LooserReducer;
             type E = LooserError;
 
             fn execute<IS>(&self, local_context: &mut Self::LC, _input_indices: IS) ->
-                Result<Self::R, JobExecuteError<Self::E, <Self::R as Reduce>::E>>
+                Result<Self::R, JobExecuteError<Self::E, <Self::RR as Reducer>::E>>
                 where IS: Iterator<Item = usize>
             {
                 Err(JobExecuteError::Job(LooserError(local_context.0)))

@@ -1,5 +1,5 @@
 use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
-use super::{Reduce, ReduceContextRetrieve, LocalContextBuilder};
+use super::{Reducer, ReducerRetrieve, LocalContextBuilder};
 
 #[derive(Debug)]
 pub enum Error {
@@ -33,11 +33,11 @@ impl<LC> Executor for SequentalExecutor<LC> {
         })
     }
 
-    fn execute_job<J, JRC, JR, JE, JRE>(&mut self, input_size: usize, job: J) ->
+    fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE> + Sync + Send + 'static,
-        JRC: ReduceContextRetrieve<LC = Self::LC>,
-        JR: Reduce<RC = JRC, E = JRE> + Send + 'static,
+        J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
+        JRR: Reducer<R = JR, E = JRE> + ReducerRetrieve<LC = Self::LC>,
+        JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static
     {
