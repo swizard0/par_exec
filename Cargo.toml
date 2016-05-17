@@ -1,6 +1,6 @@
 [package]
 name = "par_exec"
-version = "0.1.0"
+version = "0.1.10"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 description = "Simple generic parallel executor with MapReduce style."
 license = "MIT"
