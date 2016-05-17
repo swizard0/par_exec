@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::BinaryHeap;
 use num_cpus;
-use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, Reduce, ThreadContextBuilder};
+use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
+use super::{Reduce, ReduceContextRetrieve, LocalContextBuilder};
 
 #[derive(Debug)]
 pub enum Error {
@@ -15,8 +16,8 @@ pub enum Error {
     UnexpectedReduceResult,
 }
 
-enum Command<TC> {
-    Job(Box<Fn(&mut TC) + Send>),
+enum Command<LC> {
+    Job(Box<Fn(&mut LC) + Send>),
     Stop,
 }
 
@@ -25,19 +26,19 @@ enum Report {
     Stopped,
 }
 
-struct Slave<TC> {
+struct Slave<LC> {
     thread: Option<thread::JoinHandle<()>>,
-    tx: Sender<Command<TC>>,
+    tx: Sender<Command<LC>>,
     rx: Receiver<Report>,
 }
 
-impl<TC> Slave<TC> where TC: Send + 'static {
-    fn spawn(slave_id: usize, thread_context: TC) -> Result<Slave<TC>, io::Error> {
+impl<LC> Slave<LC> where LC: Send + 'static {
+    fn spawn(slave_id: usize, local_context: LC) -> Result<Slave<LC>, io::Error> {
         let (master_tx, slave_rx) = channel();
         let (slave_tx, master_rx) = channel();
         let maybe_thread = thread::Builder::new()
             .name(format!("gen_lsb parallel executor slave #{}", slave_id))
-            .spawn(move || slave_loop(thread_context, slave_rx, slave_tx));
+            .spawn(move || slave_loop(local_context, slave_rx, slave_tx));
         Ok(Slave {
             thread: Some(try!(maybe_thread)),
             tx: master_tx,
@@ -46,7 +47,7 @@ impl<TC> Slave<TC> where TC: Send + 'static {
     }
 }
 
-impl<TC> Drop for Slave<TC> {
+impl<LC> Drop for Slave<LC> {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
             self.tx.send(Command::Stop).unwrap();
@@ -64,7 +65,7 @@ impl<TC> Drop for Slave<TC> {
     }
 }
 
-fn slave_loop<TC>(mut thread_context: TC, rx: Receiver<Command<TC>>, tx: Sender<Report>) {
+fn slave_loop<LC>(mut local_context: LC, rx: Receiver<Command<LC>>, tx: Sender<Report>) {
     loop {
         match rx.recv().unwrap() {
             Command::Stop => {
@@ -72,7 +73,7 @@ fn slave_loop<TC>(mut thread_context: TC, rx: Receiver<Command<TC>>, tx: Sender<
                 break;
             },
             Command::Job(job) => {
-                job(&mut thread_context);
+                job(&mut local_context);
                 tx.send(Report::JobComplete).unwrap();
             },
         }
@@ -106,13 +107,13 @@ impl Iterator for SyncIter {
     }
 }
 
-pub struct ParallelExecutor<TC> {
+pub struct ParallelExecutor<LC> {
     slaves_count: usize,
-    slaves: Vec<Slave<TC>>,
+    slaves: Vec<Slave<LC>>,
 }
 
-impl<TC> ParallelExecutor<TC> {
-    pub fn new(slaves_count: usize) -> ParallelExecutor<TC> {
+impl<LC> ParallelExecutor<LC> {
+    pub fn new(slaves_count: usize) -> ParallelExecutor<LC> {
         ParallelExecutor {
             slaves_count: slaves_count,
             slaves: Vec::new(),
@@ -120,32 +121,35 @@ impl<TC> ParallelExecutor<TC> {
     }
 }
 
-impl<TC> Default for ParallelExecutor<TC> {
-    fn default() -> ParallelExecutor<TC> {
+impl<LC> Default for ParallelExecutor<LC> {
+    fn default() -> ParallelExecutor<LC> {
         ParallelExecutor::new(num_cpus::get())
     }
 }
 
-impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
-    type TC = TC;
+impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
+    type LC = LC;
     type E = Error;
 
-    fn run<TCB, TCBE>(mut self, mut thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
-        where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>
+    fn run<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+        where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
         for i in 0 .. self.slaves_count {
-            let thread_context =
-                try!(thread_context_builder.make_thread_context().map_err(|e| ExecutorNewError::ThreadContextBuilder(e)));
+            let local_context =
+                try!(local_context_builder.make_local_context().map_err(|e| ExecutorNewError::LocalContextBuilder(e)));
             let slave =
-                try!(Slave::spawn(i, thread_context).map_err(|e| ExecutorNewError::Executor(Error::SlaveError(e))));
+                try!(Slave::spawn(i, local_context).map_err(|e| ExecutorNewError::Executor(Error::SlaveError(e))));
             self.slaves.push(slave);
         }
         Ok(self)
     }
 
-    fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Send + 'static
+    fn execute_job<J, JRC, JR, JE>(&mut self, input_size: usize, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>> where
+        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
+        JRC: ReduceContextRetrieve<LC = Self::LC>,
+        JR: Reduce<RC = JRC>,
+        JE: Send + 'static
     {
         struct ReduceItem<JR>(JR);
 
@@ -180,9 +184,9 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
             let local_reduce_result = reduce_result.clone();
             let local_errors = errors.clone();
             let local_sync_iter = sync_iter.clone();
-            slave.tx.send(Command::Job(Box::new(move |thread_context| {
+            slave.tx.send(Command::Job(Box::new(move |local_context| {
                 // execute job
-                match local_job.execute(thread_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
+                match local_job.execute(local_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
                     Ok(mut current_result) =>
                         // reduce result
                         loop {
@@ -195,7 +199,7 @@ impl<TC> Executor for ParallelExecutor<TC> where TC: Send + 'static {
                                     break
                                 }
                             };
-                            match result_b.reduce(result_a) {
+                            match result_b.reduce(result_a, ReduceContextRetrieve::get(local_context)) {
                                 Ok(result) =>
                                     current_result = result,
                                 Err(reduce_err) => {

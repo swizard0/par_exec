@@ -1,43 +1,47 @@
-use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError, Reduce, ThreadContextBuilder};
+use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
+use super::{Reduce, ReduceContextRetrieve, LocalContextBuilder};
 
 #[derive(Debug)]
 pub enum Error {
     NotInitialized,
 }
 
-pub struct SequentalExecutor<TC> {
-    thread_context: Option<TC>,
+pub struct SequentalExecutor<LC> {
+    local_context: Option<LC>,
 }
 
-impl<TC> SequentalExecutor<TC> {
-    pub fn new() -> SequentalExecutor<TC> {
+impl<LC> SequentalExecutor<LC> {
+    pub fn new() -> SequentalExecutor<LC> {
         SequentalExecutor {
-            thread_context: None,
+            local_context: None,
         }
     }
 }
 
-impl<TC> Executor for SequentalExecutor<TC> {
-    type TC = TC;
+impl<LC> Executor for SequentalExecutor<LC> {
+    type LC = LC;
     type E = Error;
 
-    fn run<TCB, TCBE>(self, mut thread_context_builder: TCB) -> Result<Self, ExecutorNewError<Self::E, TCBE>>
-        where TCB: ThreadContextBuilder<TC = Self::TC, E = TCBE>
+    fn run<LCB, LCBE>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+        where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
-        let maybe_thread_context = thread_context_builder
-            .make_thread_context()
-            .map_err(|e| ExecutorNewError::ThreadContextBuilder(e));
+        let maybe_local_context = local_context_builder
+            .make_local_context()
+            .map_err(|e| ExecutorNewError::LocalContextBuilder(e));
         Ok(SequentalExecutor {
-            thread_context: Some(try!(maybe_thread_context)),
+            local_context: Some(try!(maybe_local_context)),
         })
     }
 
-    fn execute_job<J, JR, JE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>>
-        where J: Job<TC = Self::TC, R = JR, E = JE>, JR: Reduce, JE: Send + 'static
+    fn execute_job<J, JRC, JR, JE>(&mut self, input_size: usize, job: J) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JR::E>>> where
+        J: Job<LC = Self::LC, RC = JRC, R = JR, E = JE>,
+        JRC: ReduceContextRetrieve<LC = Self::LC>,
+        JR: Reduce<RC = JRC>,
+        JE: Send + 'static
     {
-        if let Some(thread_context) = self.thread_context.as_mut() {
-            job.execute(thread_context, 0 .. input_size)
+        if let Some(local_context) = self.local_context.as_mut() {
+            job.execute(local_context, 0 .. input_size)
                 .map(|v| Some(v))
                 .map_err(|e| ExecutorJobError::Job(e))
         } else {
