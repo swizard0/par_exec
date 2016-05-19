@@ -4,6 +4,7 @@ use super::{Reducer, ReducerRetrieve, LocalContextBuilder};
 #[derive(Debug)]
 pub enum Error {
     NotInitialized,
+    AlreadyInitialized,
 }
 
 pub struct SequentalExecutor<LC> {
@@ -25,6 +26,10 @@ impl<LC> Executor for SequentalExecutor<LC> {
     fn run<LCB, LCBE>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
+        if self.local_context.is_some() {
+            return Err(ExecutorNewError::Executor(Error::AlreadyInitialized));
+        }
+
         let maybe_local_context = local_context_builder
             .make_local_context()
             .map_err(|e| ExecutorNewError::LocalContextBuilder(e));

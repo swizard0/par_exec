@@ -11,6 +11,7 @@ use super::{Reducer, ReducerRetrieve, LocalContextBuilder};
 #[derive(Debug)]
 pub enum Error {
     NotInitialized,
+    AlreadyInitialized,
     SlaveError(io::Error),
     UnexpectedSlaveReport,
     UnexpectedReduceResult,
@@ -134,6 +135,10 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     fn run<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
+        if !self.slaves.is_empty() {
+            return Err(ExecutorNewError::Executor(Error::AlreadyInitialized));
+        }
+
         for i in 0 .. self.slaves_count {
             let local_context =
                 try!(local_context_builder.make_local_context().map_err(|e| ExecutorNewError::LocalContextBuilder(e)));
