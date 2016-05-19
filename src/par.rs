@@ -6,7 +6,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::BinaryHeap;
 use num_cpus;
 use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
-use super::{Reducer, ReducerRetrieve, LocalContextBuilder};
+use super::{Reducer, LocalContextBuilder};
 
 #[derive(Debug)]
 pub enum Error {
@@ -152,7 +152,8 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
-        JRR: Reducer<R = JR, E = JRE> + ReducerRetrieve<LC = Self::LC>,
+        JRR: Reducer<R = JR, E = JRE>,
+        Self::LC: AsMut<JRR>,
         JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static
@@ -195,7 +196,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
                 match local_job.execute(local_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
                     Ok(mut current_result) => {
                         // reduce result
-                        let reducer: &mut JRR = ReducerRetrieve::get(local_context);
+                        let reducer = local_context.as_mut();
                         loop {
                             let current_result_len = reducer.len(&current_result);
                             local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));

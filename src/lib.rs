@@ -19,12 +19,6 @@ pub trait LocalContextBuilder {
     fn make_local_context(&mut self) -> Result<Self::LC, Self::E>;
 }
 
-pub trait ReducerRetrieve {
-    type LC;
-
-    fn get(local_context: &mut Self::LC) -> &mut Self;
-}
-
 #[derive(Debug)]
 pub enum JobExecuteError<JE, RE> {
     Job(JE),
@@ -32,9 +26,9 @@ pub enum JobExecuteError<JE, RE> {
 }
 
 pub trait Job {
-    type LC;
     type R;
-    type RR: Reducer<R = Self::R> + ReducerRetrieve<LC = Self::LC>;
+    type RR: Reducer<R = Self::R>;
+    type LC: AsMut<Self::RR>;
     type E;
 
     fn execute<IS>(&self, local_context: &mut Self::LC, input_indices: IS) ->
@@ -65,7 +59,8 @@ pub trait Executor: Sized {
     fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
-        JRR: Reducer<R = JR, E = JRE> + ReducerRetrieve<LC = Self::LC>,
+        JRR: Reducer<R = JR, E = JRE>,
+        Self::LC: AsMut<JRR>,
         JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static;
@@ -80,7 +75,7 @@ mod tests {
 
     use std::sync::Arc;
     use std::collections::BinaryHeap;
-    use super::{Executor, Job, ExecutorJobError, JobExecuteError, LocalContextBuilder, Reducer, ReducerRetrieve};
+    use super::{Executor, Job, ExecutorJobError, JobExecuteError, LocalContextBuilder, Reducer};
 
     use super::{seq, par, empty};
 
@@ -102,11 +97,9 @@ mod tests {
         }
     }
 
-    impl ReducerRetrieve for SorterReducer {
-        type LC = SorterLocalContext;
-
-        fn get(local_context: &mut Self::LC) -> &mut Self {
-            &mut local_context.0
+    impl AsMut<SorterReducer> for SorterLocalContext {
+        fn as_mut(&mut self) -> &mut SorterReducer {
+            &mut self.0
         }
     }
 
@@ -178,11 +171,9 @@ mod tests {
             }
         }
 
-        impl ReducerRetrieve for LooserReducer {
-            type LC = LooserLocalContext;
-
-            fn get(local_context: &mut Self::LC) -> &mut Self {
-                &mut local_context.1
+        impl AsMut<LooserReducer> for LooserLocalContext {
+            fn as_mut(&mut self) -> &mut LooserReducer {
+                &mut self.1
             }
         }
 
