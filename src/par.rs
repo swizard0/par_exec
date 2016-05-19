@@ -132,7 +132,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     type LC = LC;
     type E = Error;
 
-    fn run<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+    fn start<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
         if !self.slaves.is_empty() {

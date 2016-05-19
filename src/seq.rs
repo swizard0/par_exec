@@ -23,7 +23,7 @@ impl<LC> Executor for SequentalExecutor<LC> {
     type LC = LC;
     type E = Error;
 
-    fn run<LCB, LCBE>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+    fn start<LCB, LCBE>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
     {
         if self.local_context.is_some() {
