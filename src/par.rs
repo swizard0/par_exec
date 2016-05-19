@@ -153,7 +153,6 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
         JRR: Reducer<R = JR, E = JRE>,
-        Self::LC: AsMut<JRR>,
         JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static
@@ -196,7 +195,13 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
                 match local_job.execute(local_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
                     Ok(mut current_result) => {
                         // reduce result
-                        let reducer = local_context.as_mut();
+                        let mut reducer = match local_job.reducer(local_context) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                local_errors.lock().unwrap().push(ExecutorJobError::Job(JobExecuteError::Job(e)));
+                                return;
+                            },
+                        };
                         loop {
                             let current_result_len = reducer.len(&current_result);
                             local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));

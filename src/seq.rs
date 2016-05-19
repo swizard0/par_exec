@@ -42,7 +42,6 @@ impl<LC> Executor for SequentalExecutor<LC> {
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
         J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
         JRR: Reducer<R = JR, E = JRE>,
-        Self::LC: AsMut<JRR>,
         JR: Send + 'static,
         JE: Send + 'static,
         JRE: Send + 'static
