@@ -38,7 +38,7 @@ impl<LC> Executor for SequentalExecutor<LC> {
         })
     }
 
-    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, _estimator: EF, _reduce: RF) ->
+    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, _estimate: EF, _reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
         EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,

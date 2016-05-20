@@ -149,7 +149,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Ok(self)
     }
 
-    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, estimator: EF, reduce: RF) ->
+    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, estimate: EF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
         EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,
@@ -193,7 +193,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
                 Ok(mut current_result) =>
                     // reduce
                     loop {
-                        let current_result_len = estimator(local_context, &current_result);
+                        let current_result_len = estimate(local_context, &current_result);
                         local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));
                         let (ReduceItem(result_a, _), ReduceItem(result_b, _)) = {
                             let mut result_lock = local_reduce_result.lock().unwrap();
