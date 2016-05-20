@@ -122,10 +122,7 @@ mod tests {
         }
 
         let mut executor = par::ParallelExecutor::new(5).start(LooserLocalContextBuilder(0)).unwrap();
-        match executor.execute_job::<_, (), _, _, _, _>(10, |&mut LooserLocalContext(x), _indices| {
-            Err(LooserError(x))
-        }, |_, _| None, |_, _, _| Err(EmptyError))
-        {
+        match executor.execute_job::<_, (), _, _, _, _>(10, |c, _indices| Err(LooserError(c.0)), |_, _| None, |_, _, _| Err(EmptyError)) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {
