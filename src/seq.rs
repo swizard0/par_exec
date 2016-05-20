@@ -1,5 +1,4 @@
-use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
-use super::{Reducer, LocalContextBuilder};
+use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,6 +21,7 @@ impl<LC> SequentalExecutor<LC> {
 impl<LC> Executor for SequentalExecutor<LC> {
     type LC = LC;
     type E = Error;
+    type IT = ::std::ops::Range<usize>;
 
     fn start<LCB, LCBE>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
@@ -38,18 +38,19 @@ impl<LC> Executor for SequentalExecutor<LC> {
         })
     }
 
-    fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
-        JRR: Reducer<R = JR, E = JRE>,
+    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, _estimator: EF, _reduce: RF) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
+        JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
+        EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,
+        RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
-        JRE: Send + 'static
+        RE: Send + 'static
     {
         if let Some(local_context) = self.local_context.as_mut() {
-            job.execute(local_context, 0 .. input_size)
+            map(local_context, 0 .. input_size)
                 .map(|v| Some(v))
-                .map_err(|e| ExecutorJobError::Job(e))
+                .map_err(|e| ExecutorJobError::Job(JobExecuteError::Job(e)))
         } else {
             Err(ExecutorJobError::Executor(Error::NotInitialized))
         }

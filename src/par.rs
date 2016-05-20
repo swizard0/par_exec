@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::BinaryHeap;
 use num_cpus;
-use super::{Executor, ExecutorNewError, ExecutorJobError, Job, JobExecuteError};
-use super::{Reducer, LocalContextBuilder};
+use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -18,7 +17,7 @@ pub enum Error {
 }
 
 enum Command<LC> {
-    Job(Box<Fn(&mut LC) + Send>),
+    Job(Arc<Box<Fn(&mut LC) + Sync + Send + 'static>>),
     Stop,
 }
 
@@ -81,7 +80,7 @@ fn slave_loop<LC>(mut local_context: LC, rx: Receiver<Command<LC>>, tx: Sender<R
     }
 }
 
-struct SyncIter {
+pub struct SyncIter {
     counter: Arc<AtomicUsize>,
     limit: usize,
 }
@@ -131,6 +130,7 @@ impl<LC> Default for ParallelExecutor<LC> {
 impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     type LC = LC;
     type E = Error;
+    type IT = SyncIter;
 
     fn start<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
@@ -149,13 +149,14 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Ok(self)
     }
 
-    fn execute_job<J, JR, JRR, JE, JRE>(&mut self, input_size: usize, job: J) ->
-        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, JRE>>> where
-        J: Job<LC = Self::LC, R = JR, RR = JRR, E = JE> + Sync + Send + 'static,
-        JRR: Reducer<R = JR, E = JRE>,
+    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, estimator: EF, reduce: RF) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
+        JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
+        EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,
+        RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
-        JRE: Send + 'static
+        RE: Send + 'static
     {
         struct ReduceItem<JR>(JR, Option<usize>);
 
@@ -180,53 +181,44 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         }
 
         let reduce_result = Arc::new(Mutex::new(BinaryHeap::new()));
-        let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, JRE>>>>> =
+        let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, RE>>>>> =
             Arc::new(Mutex::new(Vec::new()));
-        let arc_job = Arc::new(job);
         let sync_iter = Arc::new(AtomicUsize::new(0));
 
-        for slave in self.slaves.iter() {
-            let local_job = arc_job.clone();
-            let local_reduce_result = reduce_result.clone();
-            let local_errors = errors.clone();
-            let local_sync_iter = sync_iter.clone();
-            slave.tx.send(Command::Job(Box::new(move |local_context| {
-                // execute job
-                match local_job.execute(local_context, SyncIter::new(local_sync_iter.clone(), input_size)) {
-                    Ok(mut current_result) => {
-                        // reduce result
-                        let mut reducer = match local_job.reducer(local_context) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                local_errors.lock().unwrap().push(ExecutorJobError::Job(JobExecuteError::Job(e)));
-                                return;
-                            },
+        let local_reduce_result = reduce_result.clone();
+        let local_errors = errors.clone();
+        let worker_fn: Arc<Box<Fn(&mut LC) + Sync + Send + 'static>> = Arc::new(Box::new(move |ref mut local_context| {
+            // map
+            match map(local_context, SyncIter::new(sync_iter.clone(), input_size)) {
+                Ok(mut current_result) =>
+                    // reduce
+                    loop {
+                        let current_result_len = estimator(local_context, &current_result);
+                        local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));
+                        let (ReduceItem(result_a, _), ReduceItem(result_b, _)) = {
+                            let mut result_lock = local_reduce_result.lock().unwrap();
+                            if result_lock.len() >= 2 {
+                                (result_lock.pop().unwrap(), result_lock.pop().unwrap())
+                            } else {
+                                break
+                            }
                         };
-                        loop {
-                            let current_result_len = reducer.len(&current_result);
-                            local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));
-                            let (ReduceItem(result_a, _), ReduceItem(result_b, _)) = {
-                                let mut result_lock = local_reduce_result.lock().unwrap();
-                                if result_lock.len() >= 2 {
-                                    (result_lock.pop().unwrap(), result_lock.pop().unwrap())
-                                } else {
-                                    break
-                                }
-                            };
-                            match reducer.reduce(result_a, result_b) {
-                                Ok(result) =>
-                                    current_result = result,
-                                Err(reduce_err) => {
-                                    local_errors.lock().unwrap().push(ExecutorJobError::Job(JobExecuteError::Reducer(reduce_err)));
-                                    break;
-                                }
+                        match reduce(local_context, result_a, result_b) {
+                            Ok(result) =>
+                                current_result = result,
+                            Err(reduce_err) => {
+                                local_errors.lock().unwrap().push(ExecutorJobError::Job(JobExecuteError::Reducer(reduce_err)));
+                                break;
                             }
                         }
                     },
-                    Err(job_err) =>
-                        local_errors.lock().unwrap().push(ExecutorJobError::Job(job_err)),
-                }
-            }))).unwrap();
+                Err(job_err) =>
+                    local_errors.lock().unwrap().push(ExecutorJobError::Job(JobExecuteError::Job(job_err))),
+            }
+        }));
+
+        for slave in self.slaves.iter() {
+            slave.tx.send(Command::Job(worker_fn.clone())).unwrap();
         }
 
         for slave in self.slaves.iter() {
