@@ -3,7 +3,6 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
-use std::collections::BinaryHeap;
 use num_cpus;
 use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
 
@@ -149,38 +148,15 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Ok(self)
     }
 
-    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, estimate: EF, reduce: RF) ->
+    fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
-        EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
         RE: Send + 'static
     {
-        struct ReduceItem<JR>(JR, Option<usize>);
-
-        impl<JR> Eq for ReduceItem<JR> { }
-
-        impl<JR> PartialEq for ReduceItem<JR> {
-            fn eq(&self, other: &Self) -> bool {
-                self.1.eq(&other.1)
-            }
-        }
-
-        impl<JR> Ord for ReduceItem<JR> {
-            fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
-                other.1.cmp(&self.1)
-            }
-        }
-
-        impl<JR> PartialOrd for ReduceItem<JR> {
-            fn partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        let reduce_result = Arc::new(Mutex::new(BinaryHeap::new()));
+        let reduce_result = Arc::new(Mutex::new(None));
         let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, RE>>>>> =
             Arc::new(Mutex::new(Vec::new()));
         let sync_iter = Arc::new(AtomicUsize::new(0));
@@ -193,17 +169,16 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
                 Ok(mut current_result) =>
                     // reduce
                     loop {
-                        let current_result_len = estimate(local_context, &current_result);
-                        local_reduce_result.lock().unwrap().push(ReduceItem(current_result, current_result_len));
-                        let (ReduceItem(result_a, _), ReduceItem(result_b, _)) = {
+                        let existing_result = {
                             let mut result_lock = local_reduce_result.lock().unwrap();
-                            if result_lock.len() >= 2 {
-                                (result_lock.pop().unwrap(), result_lock.pop().unwrap())
+                            if let Some(arg) = result_lock.take() {
+                                arg
                             } else {
-                                break
+                                *result_lock = Some(current_result);
+                                break;
                             }
                         };
-                        match reduce(local_context, result_a, result_b) {
+                        match reduce(local_context, current_result, existing_result) {
                             Ok(result) =>
                                 current_result = result,
                             Err(reduce_err) => {
@@ -238,16 +213,6 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         }
 
         let mut result_lock = reduce_result.lock().unwrap();
-        if result_lock.len() == 0 {
-            Ok(None)
-        } else if result_lock.len() == 1 {
-            if let Some(ReduceItem(result, _)) = result_lock.pop() {
-                Ok(Some(result))
-            } else {
-                Err(ExecutorJobError::Executor(Error::UnexpectedReduceResult))
-            }
-        } else {
-            Err(ExecutorJobError::Executor(Error::UnexpectedReduceResult))
-        }
+        Ok(result_lock.take())
     }
 }

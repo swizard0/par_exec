@@ -37,10 +37,9 @@ pub trait Executor: Sized {
     fn start<LCB, LCBE>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>;
 
-    fn execute_job<JF, JR, JE, EF, RF, RE>(&mut self, input_size: usize, map: JF, estimate: EF, reduce: RF) ->
+    fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
-        EF: Fn(&mut Self::LC, &JR) -> Option<usize> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
@@ -84,10 +83,10 @@ mod tests {
 
         let local_data = data.clone();
         let result =
-            executor.execute_job::<_, _, EmptyError, _, _, EmptyError>(data.len(), move |_, indices| {
+            executor.execute_job::<_, _, EmptyError, _, EmptyError>(data.len(), move |_, indices| {
                 let heap = BinaryHeap::from(indices.map(|i| local_data[i]).collect::<Vec<_>>());
                 Ok(heap.into_sorted_vec())
-            }, |_, vec| Some(vec.len()), |_, vec_a, vec_b| {
+            }, |_, vec_a, vec_b| {
                 Ok(vec_a.into_iter().merge_by(vec_b.into_iter(), |a, b| a < b).collect())
             }).unwrap().unwrap();
         assert_eq!(sample, result);
@@ -122,7 +121,7 @@ mod tests {
         }
 
         let mut executor = par::ParallelExecutor::new(5).start(LooserLocalContextBuilder(0)).unwrap();
-        match executor.execute_job::<_, (), _, _, _, _>(10, |c, _indices| Err(LooserError(c.0)), |_, _| None, |_, _, _| Err(EmptyError)) {
+        match executor.execute_job::<_, (), _, _, _>(10, |c, _indices| Err(LooserError(c.0)), |_, _, _| Err(EmptyError)) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {
