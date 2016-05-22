@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use num_cpus;
-use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
+use super::{Executor, ExecutorNewError, ExecutorJobError, JobExecuteError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -131,8 +131,8 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     type E = Error;
     type IT = SyncIter;
 
-    fn start<LCB, LCBE>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
-        where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>
+    fn start<LCBF, LCBE>(mut self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+        where LCBF: FnMut() -> Result<Self::LC, LCBE>
     {
         if !self.slaves.is_empty() {
             return Err(ExecutorNewError::Executor(Error::AlreadyInitialized));
@@ -140,7 +140,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
 
         for i in 0 .. self.slaves_count {
             let local_context =
-                try!(local_context_builder.make_local_context().map_err(|e| ExecutorNewError::LocalContextBuilder(e)));
+                try!(local_context_builder().map_err(|e| ExecutorNewError::LocalContextBuilder(e)));
             let slave =
                 try!(Slave::spawn(i, local_context).map_err(|e| ExecutorNewError::Executor(Error::SlaveError(e))));
             self.slaves.push(slave);

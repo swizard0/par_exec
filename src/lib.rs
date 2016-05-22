@@ -3,13 +3,6 @@ extern crate num_cpus;
 pub mod seq;
 pub mod par;
 
-pub trait LocalContextBuilder {
-    type LC;
-    type E;
-
-    fn make_local_context(&mut self) -> Result<Self::LC, Self::E>;
-}
-
 #[derive(Debug)]
 pub enum JobExecuteError<JE, RE> {
     Job(JE),
@@ -34,8 +27,8 @@ pub trait Executor: Sized {
     type E;
     type IT: Iterator<Item = usize>;
 
-    fn start<LCB, LCBE>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
-        where LCB: LocalContextBuilder<LC = Self::LC, E = LCBE>;
+    fn start<LCBF, LCBE>(self, local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+        where LCBF: FnMut() -> Result<Self::LC, LCBE>;
 
     fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
@@ -55,25 +48,13 @@ mod tests {
 
     use std::sync::Arc;
     use std::collections::BinaryHeap;
-    use super::{Executor, LocalContextBuilder};
-    use super::{ExecutorJobError, JobExecuteError};
+    use super::{Executor, ExecutorJobError, JobExecuteError};
 
     use super::{seq, par};
 
     #[derive(Debug)]
     struct EmptyError;
-
     struct SorterLocalContext;
-    struct SorterLocalContextBuilder;
-
-    impl LocalContextBuilder for SorterLocalContextBuilder {
-        type LC = SorterLocalContext;
-        type E = EmptyError;
-
-        fn make_local_context(&mut self) -> Result<Self::LC, Self::E> {
-            Ok(SorterLocalContext)
-        }
-    }
 
     fn mergesort<Exec, ExecE>(mut executor: Exec) where Exec: Executor<LC = SorterLocalContext, E = ExecE>, ExecE: ::std::fmt::Debug {
         let mut rng = rand::thread_rng();
@@ -94,34 +75,23 @@ mod tests {
 
     #[test]
     fn mergesort_seq() {
-        mergesort(seq::SequentalExecutor::new().start(SorterLocalContextBuilder).unwrap());
+        mergesort(seq::SequentalExecutor::new().start::<_, ()>(|| Ok(SorterLocalContext)).unwrap());
     }
 
     #[test]
     fn mergesort_par() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.start(SorterLocalContextBuilder).unwrap());
+        mergesort(exec.start::<_, ()>(|| Ok(SorterLocalContext)).unwrap());
     }
 
     #[test]
     fn par_errors() {
         #[derive(Debug)]
         struct LooserError(usize);
-        struct LooserLocalContext(usize);
-        struct LooserLocalContextBuilder(usize);
 
-        impl LocalContextBuilder for LooserLocalContextBuilder {
-            type LC = LooserLocalContext;
-            type E = EmptyError;
-
-            fn make_local_context(&mut self) -> Result<Self::LC, Self::E> {
-                self.0 += 1;
-                Ok(LooserLocalContext(self.0))
-            }
-        }
-
-        let mut executor = par::ParallelExecutor::new(5).start(LooserLocalContextBuilder(0)).unwrap();
-        match executor.execute_job::<_, (), _, _, _>(10, |c, _indices| Err(LooserError(c.0)), |_, _, _| Err(EmptyError)) {
+        let mut counter = 0;
+        let mut executor = par::ParallelExecutor::new(5).start::<_, ()>(|| { counter += 1; Ok(counter) }).unwrap();
+        match executor.execute_job::<_, (), _, _, _>(10, |c, _indices| Err(LooserError(*c)), |_, _, _| Err(EmptyError)) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {
