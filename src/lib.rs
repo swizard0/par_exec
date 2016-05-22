@@ -1,7 +1,7 @@
 extern crate num_cpus;
 
-pub mod seq;
-pub mod par;
+// pub mod seq;
+// pub mod par;
 
 #[derive(Debug)]
 pub enum JobExecuteError<JE, RE> {
@@ -38,6 +38,22 @@ impl<F, LC, E> LocalContextBuilder for F where F: FnMut() -> Result<LC, E> {
     }
 }
 
+pub trait Mapper<'a, LC, IT> where IT: Iterator<Item = usize> {
+    type R;
+    type E;
+
+    fn map(&self, local_context: &'a mut LC, iter: IT) -> Result<Self::R, Self::E>;
+}
+
+impl<'a, F, LC, IT, R, E> Mapper<'a, LC, IT> for F where F: Fn(&'a mut LC, IT) -> Result<R, E>, IT: Iterator<Item = usize> {
+    type R = R;
+    type E = E;
+
+    fn map(&self, local_context: &'a mut LC, iter: IT) -> Result<Self::R, Self::E> {
+        self(local_context, iter)
+    }
+}
+
 pub trait Executor: Sized {
     type LC;
     type E;
@@ -50,9 +66,9 @@ pub trait Executor: Sized {
         self.try_start(|| Ok(local_context_builder()))
     }
 
-    fn try_execute_job<JF, JR, RF, JE, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn try_execute_job<JO, JR, RF, JE, RE>(&mut self, input_size: usize, map: JO, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
-        JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
+        JO: Mapper<Self::LC, Self::IT, R = JR, E = JE> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
