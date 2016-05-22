@@ -148,7 +148,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Ok(self)
     }
 
-    fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn try_execute_job<JF, JR, RF, JE, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,

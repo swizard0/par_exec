@@ -34,13 +34,22 @@ pub trait Executor: Sized {
         self.try_start(|| Ok(local_context_builder()))
     }
 
-    fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn try_execute_job<JF, JR, RF, JE, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
         JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
         RE: Send + 'static;
+
+    fn execute_job<JF, JR, RF>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+        Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<(), ()>>> where
+        JF: Fn(&mut Self::LC, Self::IT) -> JR + Sync + Send + 'static,
+        RF: Fn(&mut Self::LC, JR, JR) -> JR + Sync + Send + 'static,
+        JR: Send + 'static
+    {
+        self.try_execute_job(input_size, move |lc, it| Ok(map(lc, it)), move |lc, a, b| Ok(reduce(lc, a, b)))
+    }
 }
 
 #[cfg(test)]
@@ -56,8 +65,6 @@ mod tests {
 
     use super::{seq, par};
 
-    #[derive(Debug)]
-    struct EmptyError;
     struct SorterLocalContext;
 
     fn mergesort<Exec, ExecE>(mut executor: Exec) where Exec: Executor<LC = SorterLocalContext, E = ExecE>, ExecE: ::std::fmt::Debug {
@@ -68,12 +75,12 @@ mod tests {
 
         let local_data = data.clone();
         let result =
-            executor.execute_job::<_, _, EmptyError, _, EmptyError>(data.len(), move |_, indices| {
-                let heap = BinaryHeap::from(indices.map(|i| local_data[i]).collect::<Vec<_>>());
-                Ok(heap.into_sorted_vec())
-            }, |_, vec_a, vec_b| {
-                Ok(vec_a.into_iter().merge_by(vec_b.into_iter(), |a, b| a < b).collect())
-            }).unwrap().unwrap();
+            executor.execute_job(
+                data.len(),
+                move |_, indices| BinaryHeap::from(indices.map(|i| local_data[i]).collect::<Vec<_>>()).into_sorted_vec(),
+                |_, vec_a, vec_b| vec_a.into_iter().merge_by(vec_b.into_iter(), |a, b| a < b).collect())
+            .unwrap()
+            .unwrap();
         assert_eq!(sample, result);
     }
 
@@ -95,7 +102,7 @@ mod tests {
 
         let mut counter = 0;
         let mut executor = par::ParallelExecutor::new(5).start(|| { counter += 1; counter }).unwrap();
-        match executor.execute_job::<_, (), _, _, _>(10, |c, _indices| Err(LooserError(*c)), |_, _, _| Err(EmptyError)) {
+        match executor.try_execute_job(10, |c, _indices| Err::<(), _>(LooserError(*c)), |_, _, _| Err(())) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {
