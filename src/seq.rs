@@ -1,4 +1,4 @@
-use super::{Executor, ExecutorNewError, ExecutorJobError, JobExecuteError};
+use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -23,14 +23,15 @@ impl<LC> Executor for SequentalExecutor<LC> {
     type E = Error;
     type IT = ::std::ops::Range<usize>;
 
-    fn try_start<LCBF, LCBE>(self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
-        where LCBF: FnMut() -> Result<Self::LC, LCBE>
+    fn try_start<LCB>(self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCB::E>>
+        where LCB: LocalContextBuilder<LC = Self::LC>
     {
         if self.local_context.is_some() {
             return Err(ExecutorNewError::Executor(Error::AlreadyInitialized));
         }
 
-        let maybe_local_context = local_context_builder()
+        let maybe_local_context = local_context_builder
+            .make_local_context()
             .map_err(|e| ExecutorNewError::LocalContextBuilder(e));
         Ok(SequentalExecutor {
             local_context: Some(try!(maybe_local_context)),

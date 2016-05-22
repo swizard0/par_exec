@@ -22,13 +22,29 @@ pub enum ExecutorJobError<EE, JE> {
     Several(Vec<ExecutorJobError<EE, JE>>),
 }
 
+pub trait LocalContextBuilder {
+    type LC;
+    type E;
+
+    fn make_local_context(&mut self) -> Result<Self::LC, Self::E>;
+}
+
+impl<F, LC, E> LocalContextBuilder for F where F: FnMut() -> Result<LC, E> {
+    type LC = LC;
+    type E = E;
+
+    fn make_local_context(&mut self) -> Result<Self::LC, Self::E> {
+        self()
+    }
+}
+
 pub trait Executor: Sized {
     type LC;
     type E;
     type IT: Iterator<Item = usize>;
 
-    fn try_start<LCBF, LCBE>(self, local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
-        where LCBF: FnMut() -> Result<Self::LC, LCBE>;
+    fn try_start<LCB>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCB::E>>
+        where LCB: LocalContextBuilder<LC = Self::LC>;
 
     fn start<LCBF>(self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, ()>> where LCBF: FnMut() -> Self::LC {
         self.try_start(|| Ok(local_context_builder()))
