@@ -23,7 +23,7 @@ impl<LC> Executor for SequentalExecutor<LC> {
     type E = Error;
     type IT = ::std::ops::Range<usize>;
 
-    fn start<LCBF, LCBE>(self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+    fn try_start<LCBF, LCBE>(self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCBF: FnMut() -> Result<Self::LC, LCBE>
     {
         if self.local_context.is_some() {

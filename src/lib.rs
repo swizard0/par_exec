@@ -27,8 +27,12 @@ pub trait Executor: Sized {
     type E;
     type IT: Iterator<Item = usize>;
 
-    fn start<LCBF, LCBE>(self, local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+    fn try_start<LCBF, LCBE>(self, local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCBF: FnMut() -> Result<Self::LC, LCBE>;
+
+    fn start<LCBF>(self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, ()>> where LCBF: FnMut() -> Self::LC {
+        self.try_start(|| Ok(local_context_builder()))
+    }
 
     fn execute_job<JF, JR, JE, RF, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
@@ -75,13 +79,13 @@ mod tests {
 
     #[test]
     fn mergesort_seq() {
-        mergesort(seq::SequentalExecutor::new().start::<_, ()>(|| Ok(SorterLocalContext)).unwrap());
+        mergesort(seq::SequentalExecutor::new().start(|| SorterLocalContext).unwrap());
     }
 
     #[test]
     fn mergesort_par() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.start::<_, ()>(|| Ok(SorterLocalContext)).unwrap());
+        mergesort(exec.start(|| SorterLocalContext).unwrap());
     }
 
     #[test]
@@ -90,7 +94,7 @@ mod tests {
         struct LooserError(usize);
 
         let mut counter = 0;
-        let mut executor = par::ParallelExecutor::new(5).start::<_, ()>(|| { counter += 1; Ok(counter) }).unwrap();
+        let mut executor = par::ParallelExecutor::new(5).start(|| { counter += 1; counter }).unwrap();
         match executor.execute_job::<_, (), _, _, _>(10, |c, _indices| Err(LooserError(*c)), |_, _, _| Err(EmptyError)) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),

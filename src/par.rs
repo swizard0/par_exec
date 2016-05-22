@@ -131,7 +131,7 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     type E = Error;
     type IT = SyncIter;
 
-    fn start<LCBF, LCBE>(mut self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
+    fn try_start<LCBF, LCBE>(mut self, mut local_context_builder: LCBF) -> Result<Self, ExecutorNewError<Self::E, LCBE>>
         where LCBF: FnMut() -> Result<Self::LC, LCBE>
     {
         if !self.slaves.is_empty() {
