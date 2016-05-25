@@ -38,10 +38,18 @@ impl<F, LC, E> LocalContextBuilder for F where F: FnMut() -> Result<LC, E> {
     }
 }
 
+pub trait WorkAmount: Sync + Send + 'static {
+    type IT: Iterator<Item = usize>;
+}
+
+pub trait JobIterBuild<WA> where WA: WorkAmount {
+    fn build(&self, work_amount: &WA) -> WA::IT;
+}
+
 pub trait Executor: Sized {
     type LC;
     type E;
-    type IT: Iterator<Item = usize>;
+    type JIB;
 
     fn try_start<LCB>(self, local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCB::E>>
         where LCB: LocalContextBuilder<LC = Self::LC>;
@@ -50,21 +58,25 @@ pub trait Executor: Sized {
         self.try_start(|| Ok(local_context_builder()))
     }
 
-    fn try_execute_job<JF, JR, RF, JE, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn try_execute_job<WA, JF, JR, RF, JE, RE>(&mut self, work_amount: WA, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
-        JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
+        WA: WorkAmount,
+        Self::JIB: JobIterBuild<WA>,
+        JF: Fn(&mut Self::LC, WA::IT) -> Result<JR, JE> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
         RE: Send + 'static;
 
-    fn execute_job<JF, JR, RF>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn execute_job<WA, JF, JR, RF>(&mut self, work_amount: WA, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<(), ()>>> where
-        JF: Fn(&mut Self::LC, Self::IT) -> JR + Sync + Send + 'static,
+        WA: WorkAmount,
+        Self::JIB: JobIterBuild<WA>,
+        JF: Fn(&mut Self::LC, WA::IT) -> JR + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> JR + Sync + Send + 'static,
         JR: Send + 'static
     {
-        self.try_execute_job(input_size, move |lc, it| Ok(map(lc, it)), move |lc, a, b| Ok(reduce(lc, a, b)))
+        self.try_execute_job(work_amount, move |lc, it| Ok(map(lc, it)), move |lc, a, b| Ok(reduce(lc, a, b)))
     }
 }
 
@@ -77,13 +89,19 @@ mod tests {
 
     use std::sync::Arc;
     use std::collections::BinaryHeap;
-    use super::{Executor, ExecutorJobError, JobExecuteError};
+    use super::{Executor, ExecutorJobError, JobExecuteError, WorkAmount, JobIterBuild};
 
     use super::{seq, par};
 
     struct SorterLocalContext;
 
-    fn mergesort<Exec, ExecE>(mut executor: Exec) where Exec: Executor<LC = SorterLocalContext, E = ExecE>, ExecE: ::std::fmt::Debug {
+    fn mergesort<Exec, ExecE, WA, F>(mut executor: Exec, make_wa: F) where
+        Exec: Executor<LC = SorterLocalContext, E = ExecE>,
+        ExecE: ::std::fmt::Debug,
+        WA: WorkAmount,
+        Exec::JIB: JobIterBuild<WA>,
+        F: Fn(usize) -> WA
+    {
         let mut rng = rand::thread_rng();
         let data: Arc<Vec<u64>> = Arc::new((0 .. 262144).map(|_| rng.gen()).collect());
         let mut sample = (*data).clone();
@@ -92,7 +110,7 @@ mod tests {
         let local_data = data.clone();
         let result =
             executor.execute_job(
-                data.len(),
+                make_wa(data.len()),
                 move |_, indices| BinaryHeap::from(indices.map(|i| local_data[i]).collect::<Vec<_>>()).into_sorted_vec(),
                 |_, vec_a, vec_b| vec_a.into_iter().merge_by(vec_b.into_iter(), |a, b| a < b).collect())
             .unwrap()
@@ -102,13 +120,19 @@ mod tests {
 
     #[test]
     fn mergesort_seq() {
-        mergesort(seq::SequentalExecutor::new().start(|| SorterLocalContext).unwrap());
+        mergesort(seq::SequentalExecutor::new().start(|| SorterLocalContext).unwrap(), seq::Sequentially);
     }
 
     #[test]
-    fn mergesort_par() {
+    fn mergesort_par_alt() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.start(|| SorterLocalContext).unwrap());
+        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::Alternately);
+    }
+
+    #[test]
+    fn mergesort_par_chunks() {
+        let exec: par::ParallelExecutor<_> = Default::default();
+        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::ByEqualChunks);
     }
 
     #[test]
@@ -118,7 +142,7 @@ mod tests {
 
         let mut counter = 0;
         let mut executor = par::ParallelExecutor::new(5).start(|| { counter += 1; counter }).unwrap();
-        match executor.try_execute_job(10, |c, _indices| Err::<(), _>(LooserError(*c)), |_, _, _| Err(())) {
+        match executor.try_execute_job(par::Alternately(10), |c, _indices| Err::<(), _>(LooserError(*c)), |_, _, _| Err(())) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use num_cpus;
-use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError};
+use super::{Executor, LocalContextBuilder, ExecutorNewError, ExecutorJobError, JobExecuteError, WorkAmount, JobIterBuild};
 
 #[derive(Debug)]
 pub enum Error {
@@ -79,33 +79,6 @@ fn slave_loop<LC>(mut local_context: LC, rx: Receiver<Command<LC>>, tx: Sender<R
     }
 }
 
-pub struct SyncIter {
-    counter: Arc<AtomicUsize>,
-    limit: usize,
-}
-
-impl SyncIter {
-    fn new(counter: Arc<AtomicUsize>, limit: usize) -> SyncIter {
-        SyncIter {
-            counter: counter,
-            limit: limit,
-        }
-    }
-}
-
-impl Iterator for SyncIter {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<usize> {
-        let current = self.counter.fetch_add(1, Ordering::Relaxed);
-        if current < self.limit {
-            Some(current)
-        } else {
-            None
-        }
-    }
-}
-
 pub struct ParallelExecutor<LC> {
     slaves_count: usize,
     slaves: Vec<Slave<LC>>,
@@ -126,10 +99,77 @@ impl<LC> Default for ParallelExecutor<LC> {
     }
 }
 
+pub struct IterBuild {
+    slaves_count: usize,
+    sync: Arc<AtomicUsize>,
+}
+
+impl IterBuild {
+    fn new(slaves_count: usize) -> IterBuild {
+        IterBuild {
+            slaves_count: slaves_count,
+            sync: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+pub struct Alternately(pub usize);
+
+impl WorkAmount for Alternately {
+    type IT = SyncIter;
+}
+
+impl JobIterBuild<Alternately> for IterBuild {
+    fn build(&self, &Alternately(work_amount): &Alternately) -> SyncIter {
+        SyncIter {
+            counter: self.sync.clone(),
+            limit: work_amount,
+        }
+    }
+}
+
+pub struct SyncIter {
+    counter: Arc<AtomicUsize>,
+    limit: usize,
+}
+
+impl Iterator for SyncIter {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        let current = self.counter.fetch_add(1, Ordering::Relaxed);
+        if current < self.limit {
+            Some(current)
+        } else {
+            None
+        }
+    }
+}
+
+pub struct ByEqualChunks(pub usize);
+
+impl WorkAmount for ByEqualChunks {
+    type IT = ::std::ops::Range<usize>;
+}
+
+impl JobIterBuild<ByEqualChunks> for IterBuild {
+    fn build(&self, &ByEqualChunks(work_amount): &ByEqualChunks) -> <ByEqualChunks as WorkAmount>::IT {
+        let chunk = work_amount / self.slaves_count;
+        let current_slave = self.sync.fetch_add(1, Ordering::Relaxed);
+        let start = current_slave * chunk;
+        let end = if current_slave < self.slaves_count - 1 {
+            start + chunk
+        } else {
+            work_amount
+        };
+        start .. end
+    }
+}
+
 impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
     type LC = LC;
     type E = Error;
-    type IT = SyncIter;
+    type JIB = IterBuild;
 
     fn try_start<LCB>(mut self, mut local_context_builder: LCB) -> Result<Self, ExecutorNewError<Self::E, LCB::E>>
         where LCB: LocalContextBuilder<LC = Self::LC>
@@ -148,9 +188,11 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         Ok(self)
     }
 
-    fn try_execute_job<JF, JR, RF, JE, RE>(&mut self, input_size: usize, map: JF, reduce: RF) ->
+    fn try_execute_job<WA, JF, JR, RF, JE, RE>(&mut self, work_amount: WA, map: JF, reduce: RF) ->
         Result<Option<JR>, ExecutorJobError<Self::E, JobExecuteError<JE, RE>>> where
-        JF: Fn(&mut Self::LC, Self::IT) -> Result<JR, JE> + Sync + Send + 'static,
+        WA: WorkAmount,
+        Self::JIB: JobIterBuild<WA>,
+        JF: Fn(&mut Self::LC, WA::IT) -> Result<JR, JE> + Sync + Send + 'static,
         RF: Fn(&mut Self::LC, JR, JR) -> Result<JR, RE> + Sync + Send + 'static,
         JR: Send + 'static,
         JE: Send + 'static,
@@ -159,13 +201,13 @@ impl<LC> Executor for ParallelExecutor<LC> where LC: Send + 'static {
         let reduce_result = Arc::new(Mutex::new(None));
         let errors: Arc<Mutex<Vec<ExecutorJobError<Error, JobExecuteError<JE, RE>>>>> =
             Arc::new(Mutex::new(Vec::new()));
-        let sync_iter = Arc::new(AtomicUsize::new(0));
+        let iter_build = IterBuild::new(self.slaves_count);
 
         let local_reduce_result = reduce_result.clone();
         let local_errors = errors.clone();
         let worker_fn: Arc<Box<Fn(&mut LC) + Sync + Send + 'static>> = Arc::new(Box::new(move |ref mut local_context| {
             // map
-            match map(local_context, SyncIter::new(sync_iter.clone(), input_size)) {
+            match map(local_context, iter_build.build(&work_amount)) {
                 Ok(mut current_result) =>
                     // reduce
                     loop {
