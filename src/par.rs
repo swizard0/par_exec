@@ -113,10 +113,14 @@ impl IterBuild {
     }
 }
 
-pub struct Alternately(pub usize);
+pub struct Alternately(usize);
 
 impl WorkAmount for Alternately {
     type IT = SyncIter;
+
+    fn new(work_amount: usize) -> Alternately {
+        Alternately(work_amount)
+    }
 }
 
 impl JobIterBuild<Alternately> for IterBuild {
@@ -146,10 +150,14 @@ impl Iterator for SyncIter {
     }
 }
 
-pub struct ByEqualChunks(pub usize);
+pub struct ByEqualChunks(usize);
 
 impl WorkAmount for ByEqualChunks {
     type IT = ::std::ops::Range<usize>;
+
+    fn new(work_amount: usize) -> ByEqualChunks {
+        ByEqualChunks(work_amount)
+    }
 }
 
 impl JobIterBuild<ByEqualChunks> for IterBuild {

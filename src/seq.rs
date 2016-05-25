@@ -18,10 +18,14 @@ impl<LC> SequentalExecutor<LC> {
     }
 }
 
-pub struct Sequentially(pub usize);
+pub struct Sequentially(usize);
 
 impl WorkAmount for Sequentially {
     type IT = ::std::ops::Range<usize>;
+
+    fn new(work_amount: usize) -> Sequentially {
+        Sequentially(work_amount)
+    }
 }
 
 pub struct IterBuild;

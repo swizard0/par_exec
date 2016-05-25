@@ -40,6 +40,8 @@ impl<F, LC, E> LocalContextBuilder for F where F: FnMut() -> Result<LC, E> {
 
 pub trait WorkAmount: Sync + Send + 'static {
     type IT: Iterator<Item = usize>;
+
+    fn new(work_amount: usize) -> Self;
 }
 
 pub trait JobIterBuild<WA> where WA: WorkAmount {
@@ -120,19 +122,19 @@ mod tests {
 
     #[test]
     fn mergesort_seq() {
-        mergesort(seq::SequentalExecutor::new().start(|| SorterLocalContext).unwrap(), seq::Sequentially);
+        mergesort(seq::SequentalExecutor::new().start(|| SorterLocalContext).unwrap(), seq::Sequentially::new);
     }
 
     #[test]
     fn mergesort_par_alt() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::Alternately);
+        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::Alternately::new);
     }
 
     #[test]
     fn mergesort_par_chunks() {
         let exec: par::ParallelExecutor<_> = Default::default();
-        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::ByEqualChunks);
+        mergesort(exec.start(|| SorterLocalContext).unwrap(), par::ByEqualChunks::new);
     }
 
     #[test]
@@ -142,7 +144,7 @@ mod tests {
 
         let mut counter = 0;
         let mut executor = par::ParallelExecutor::new(5).start(|| { counter += 1; counter }).unwrap();
-        match executor.try_execute_job(par::Alternately(10), |c, _indices| Err::<(), _>(LooserError(*c)), |_, _, _| Err(())) {
+        match executor.try_execute_job(par::Alternately::new(10), |c, _indices| Err::<(), _>(LooserError(*c)), |_, _, _| Err(())) {
             Ok(_) =>
                 panic!("Unexpected successfull result"),
             Err(ExecutorJobError::Several(errs)) => {
